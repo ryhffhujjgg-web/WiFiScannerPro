@@ -12,11 +12,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -33,7 +37,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Какие разрешения нужны в зависимости от версии Android. */
 private fun requiredPermissions(): Array<String> {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(
@@ -59,7 +62,6 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
-        // Если пользователь разрешил всё, что просили — запускаем скан
         if (result.values.all { it }) {
             vm.scan(context)
         }
@@ -80,13 +82,11 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 1. Заголовок
             item {
                 Text("WiFi Scanner Pro", style = MaterialTheme.typography.headlineMedium)
                 Text("Диагностика домашней сети", style = MaterialTheme.typography.bodyMedium)
             }
 
-            // 2. Карточка статуса и кнопки
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -119,7 +119,6 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 }
             }
 
-            // 3. Заголовок списка устройств
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -131,31 +130,53 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 }
             }
 
-            // 4. Заглушка, если список пуст
             if (state.devices.isEmpty() && !state.scanning) {
                 item {
                     Text("Нажми «Начать сканирование», чтобы проверить сеть.")
                 }
             }
 
-            // 5. Список устройств (без MAC-адресов)
+            // Обновленный вывод устройств с портами
             items(state.devices) { device ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Text(device.name, style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(device.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        }
                         Text("IP: ${device.ip}")
-                        // Вывод MAC-адреса убран, так как Android 10+ блокирует его чтение
+
+                        // Вывод портов
+                        if (device.ports.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Порты",
+                                    tint = Color(0xFF4CAF50), // Зеленый
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Открытые порты: ${device.ports.joinToString(", ")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF4CAF50)
+                                )
+                            }
+                        }
                     }
                 }
             }
 
-            // 6. Примечание внизу
             item {
                 Text(
-                    "Примечание: некоторые устройства не отвечают на ping, " +
-                        "но видны в ARP-таблице. Список может быть неполным, " +
-                        "если устройства скрыты настройками роутера.",
-                    style = MaterialTheme.typography.bodySmall
+                    "Проверяются популярные порты: 22 (SSH), 80/443 (Web), 445 (SMB), 3389 (RDP), 9100 (Принтер).",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
         }
