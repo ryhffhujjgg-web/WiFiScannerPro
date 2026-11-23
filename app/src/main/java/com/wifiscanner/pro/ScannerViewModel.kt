@@ -12,12 +12,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-// Добавили поле ports: список открытых портов
 data class DeviceInfo(
     val ip: String, 
     val name: String, 
@@ -39,7 +39,6 @@ class ScannerViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(ScannerUiState())
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
 
-    // Список портов для проверки (80, 443 - веб, 22 - SSH, 3389 - RDP, 445 - SMB/Windows, 9100 - Принтер)
     private val targetPorts = listOf(22, 80, 443, 445, 3389, 9100)
 
     fun scan(context: Context) {
@@ -74,6 +73,18 @@ class ScannerViewModel : ViewModel() {
                 val c = (ip shr 16) and 255
                 val phoneIp = "$a.$b.$c.${(ip shr 24) and 255}"
 
+                // Получаем ВСЕ IP-адреса телефона, чтобы точно его исключить
+                val localIps = withContext(Dispatchers.IO) {
+                    try {
+                        NetworkInterface.getNetworkInterfaces().toList()
+                            .flatMap { it.inetAddresses.toList() }
+                            .map { it.hostAddress ?: "" }
+                            .filter { it.contains(".") }
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                }
+
                 val gateway = info.gateway
                 val gatewayIp = if (gateway != 0) {
                     "${gateway and 255}.${(gateway shr 8) and 255}." +
@@ -85,10 +96,8 @@ class ScannerViewModel : ViewModel() {
                     status = "Ищем устройства в локальной сети…"
                 )
 
-                // 1) ARP-скан
                 val arpDevices = withContext(Dispatchers.IO) { readArpTable() }
 
-                // 2) Ping-скан с прогрессом
                 val found = mutableListOf<DeviceInfo>()
                 val pool = Executors.newFixedThreadPool(32)
                 val latch = CountDownLatch(254)
@@ -120,7 +129,6 @@ class ScannerViewModel : ViewModel() {
                 latch.await()
                 pool.shutdown()
 
-                // 3) Добавляем то, что нашлось только в ARP
                 arpDevices.forEach { (arpIp, mac) ->
                     if (found.none { it.ip == arpIp }) {
                         found.add(
@@ -133,22 +141,19 @@ class ScannerViewModel : ViewModel() {
                     }
                 }
 
-                // 4) Шлюз всегда показываем
                 if (found.none { it.ip == gatewayIp } && gatewayIp != "не определён") {
                     found.add(DeviceInfo(gatewayIp, "Роутер (шлюз)", arpDevices[gatewayIp]))
                 }
 
-                // 5) Убираем свой IP и сортируем
-                val otherDevices = found.filter { it.ip != phoneIp }
+                // Исключаем ВСЕ локальные IP телефона
+                val otherDevices = found.filter { it.ip !in localIps }
                     .sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
 
-                // Обновляем статус перед сканированием портов
                 _uiState.value = _uiState.value.copy(
                     status = "Проверяем открытые порты…",
                     devices = otherDevices
                 )
 
-                // 6) Сканируем порты для найденных устройств
                 val devicesWithPorts = withContext(Dispatchers.IO) {
                     otherDevices.map { device ->
                         val openPorts = mutableListOf<Int>()
@@ -161,7 +166,6 @@ class ScannerViewModel : ViewModel() {
                     }
                 }
 
-                // 7. Финал
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
                     devices = devicesWithPorts,
@@ -177,7 +181,6 @@ class ScannerViewModel : ViewModel() {
         }
     }
 
-    /** Проверка одного порта через TCP-соединение с таймаутом */
     private fun isPortOpen(ip: String, port: Int, timeoutMs: Int): Boolean {
         return try {
             Socket().use { socket ->
