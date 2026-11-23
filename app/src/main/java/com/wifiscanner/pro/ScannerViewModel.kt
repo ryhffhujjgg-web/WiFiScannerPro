@@ -11,18 +11,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-data class DeviceInfo(val ip: String, val name: String, val mac: String? = null)
+// Добавили поле ports: список открытых портов
+data class DeviceInfo(
+    val ip: String, 
+    val name: String, 
+    val mac: String? = null,
+    val ports: List<Int> = emptyList()
+)
 
 data class ScannerUiState(
     val scanning: Boolean = false,
     val status: String = "Готов к сканированию",
     val network: String = "Сеть пока не определена",
     val devices: List<DeviceInfo> = emptyList(),
-    val progress: Int = 0,        // 0..254
+    val progress: Int = 0,
     val total: Int = 254
 )
 
@@ -30,6 +38,9 @@ class ScannerViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(ScannerUiState())
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
+
+    // Список портов для проверки (80, 443 - веб, 22 - SSH, 3389 - RDP, 445 - SMB/Windows, 9100 - Принтер)
+    private val targetPorts = listOf(22, 80, 443, 445, 3389, 9100)
 
     fun scan(context: Context) {
         if (_uiState.value.scanning) return
@@ -58,7 +69,6 @@ class ScannerViewModel : ViewModel() {
                     return@launch
                 }
 
-                // Извлекаем октеты (байты) из 32-битного числа IP
                 val a = ip and 255
                 val b = (ip shr 8) and 255
                 val c = (ip shr 16) and 255
@@ -75,7 +85,7 @@ class ScannerViewModel : ViewModel() {
                     status = "Ищем устройства в локальной сети…"
                 )
 
-                // 1) ARP-скан (быстро, показывает MAC, если ОС разрешает)
+                // 1) ARP-скан
                 val arpDevices = withContext(Dispatchers.IO) { readArpTable() }
 
                 // 2) Ping-скан с прогрессом
@@ -100,7 +110,6 @@ class ScannerViewModel : ViewModel() {
                                 }
                             }
                         } catch (_: Exception) {
-                            // Игнорируем таймауты и ошибки отдельных адресов
                         } finally {
                             val p = done.incrementAndGet()
                             _uiState.value = _uiState.value.copy(progress = p)
@@ -129,19 +138,36 @@ class ScannerViewModel : ViewModel() {
                     found.add(DeviceInfo(gatewayIp, "Роутер (шлюз)", arpDevices[gatewayIp]))
                 }
 
-                // 5) Убираем свой собственный IP из списка
+                // 5) Убираем свой IP и сортируем
                 val otherDevices = found.filter { it.ip != phoneIp }
+                    .sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
 
-                // 6) Сортируем по последнему октету IP (чтобы было красиво: .1, .2, .10)
-                val result = otherDevices.sortedBy {
-                    it.ip.substringAfterLast(".").toIntOrNull() ?: 0
+                // Обновляем статус перед сканированием портов
+                _uiState.value = _uiState.value.copy(
+                    status = "Проверяем открытые порты…",
+                    devices = otherDevices
+                )
+
+                // 6) Сканируем порты для найденных устройств
+                val devicesWithPorts = withContext(Dispatchers.IO) {
+                    otherDevices.map { device ->
+                        val openPorts = mutableListOf<Int>()
+                        for (port in targetPorts) {
+                            if (isPortOpen(device.ip, port, 300)) {
+                                openPorts.add(port)
+                            }
+                        }
+                        device.copy(ports = openPorts)
+                    }
                 }
 
+                // 7. Финал
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
-                    devices = result,
-                    status = "Сканирование завершено. Найдено: ${result.size}"
+                    devices = devicesWithPorts,
+                    status = "Сканирование завершено. Найдено: ${devicesWithPorts.size}"
                 )
+
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
@@ -151,7 +177,18 @@ class ScannerViewModel : ViewModel() {
         }
     }
 
-    /** Читает /proc/net/arp — там реальные IP+MAC соседей (если ОС разрешает). */
+    /** Проверка одного порта через TCP-соединение с таймаутом */
+    private fun isPortOpen(ip: String, port: Int, timeoutMs: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(ip, port), timeoutMs)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun readArpTable(): Map<String, String> {
         val result = mutableMapOf<String, String>()
         try {
@@ -165,7 +202,6 @@ class ScannerViewModel : ViewModel() {
                 }
             }
         } catch (_: Exception) {
-            // Если Android запретил читать файл — просто вернём пустой список
         }
         return result
     }
