@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 data class DeviceInfo(val ip: String, val name: String, val mac: String? = null)
 
@@ -56,6 +58,7 @@ class ScannerViewModel : ViewModel() {
                     return@launch
                 }
 
+                // Извлекаем октеты (байты) из 32-битного числа IP
                 val a = ip and 255
                 val b = (ip shr 8) and 255
                 val c = (ip shr 16) and 255
@@ -72,14 +75,14 @@ class ScannerViewModel : ViewModel() {
                     status = "Ищем устройства в локальной сети…"
                 )
 
-                // 1) ARP-скан (быстро, показывает MAC)
+                // 1) ARP-скан (быстро, показывает MAC, если ОС разрешает)
                 val arpDevices = withContext(Dispatchers.IO) { readArpTable() }
 
                 // 2) Ping-скан с прогрессом
                 val found = mutableListOf<DeviceInfo>()
                 val pool = Executors.newFixedThreadPool(32)
-                val latch = java.util.concurrent.CountDownLatch(254)
-                val done = java.util.concurrent.atomic.AtomicInteger(0)
+                val latch = CountDownLatch(254)
+                val done = AtomicInteger(0)
 
                 (1..254).forEach { host ->
                     pool.submit {
@@ -97,6 +100,7 @@ class ScannerViewModel : ViewModel() {
                                 }
                             }
                         } catch (_: Exception) {
+                            // Игнорируем таймауты и ошибки отдельных адресов
                         } finally {
                             val p = done.incrementAndGet()
                             _uiState.value = _uiState.value.copy(progress = p)
@@ -125,7 +129,11 @@ class ScannerViewModel : ViewModel() {
                     found.add(DeviceInfo(gatewayIp, "Роутер (шлюз)", arpDevices[gatewayIp]))
                 }
 
-                val result = found.sortedBy {
+                // 5) Убираем свой собственный IP из списка
+                val otherDevices = found.filter { it.ip != phoneIp }
+
+                // 6) Сортируем по последнему октету IP (чтобы было красиво: .1, .2, .10)
+                val result = otherDevices.sortedBy {
                     it.ip.substringAfterLast(".").toIntOrNull() ?: 0
                 }
 
@@ -143,7 +151,7 @@ class ScannerViewModel : ViewModel() {
         }
     }
 
-    /** Читает /proc/net/arp — там реальные IP+MAC соседей. */
+    /** Читает /proc/net/arp — там реальные IP+MAC соседей (если ОС разрешает). */
     private fun readArpTable(): Map<String, String> {
         val result = mutableMapOf<String, String>()
         try {
@@ -157,6 +165,7 @@ class ScannerViewModel : ViewModel() {
                 }
             }
         } catch (_: Exception) {
+            // Если Android запретил читать файл — просто вернём пустой список
         }
         return result
     }
