@@ -1,16 +1,10 @@
 package com.wifiscanner.pro
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.LinkProperties
 import android.net.wifi.WifiManager
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,9 +21,15 @@ import java.util.concurrent.atomic.AtomicInteger
 data class DeviceInfo(
     val ip: String,
     val name: String,
+    val type: DeviceType, // Новое поле: тип устройства
     val mac: String? = null,
     val ports: List<Int> = emptyList()
 )
+
+// Перечисление типов устройств для иконок
+enum class DeviceType {
+    ROUTER, WINDOWS, LINUX, PRINTER, WEB_SERVER, UNKNOWN
+}
 
 data class ScannerUiState(
     val scanning: Boolean = false,
@@ -37,8 +37,7 @@ data class ScannerUiState(
     val network: String = "Сеть пока не определена",
     val devices: List<DeviceInfo> = emptyList(),
     val progress: Int = 0,
-    val total: Int = 254,
-    val error: String? = null
+    val total: Int = 254
 )
 
 class ScannerViewModel : ViewModel() {
@@ -47,67 +46,80 @@ class ScannerViewModel : ViewModel() {
     val uiState: StateFlow<ScannerUiState> = _uiState.asStateFlow()
 
     private val targetPorts = listOf(22, 80, 443, 445, 3389, 9100)
-    private var scanJob: Job? = null
 
     fun scan(context: Context) {
         if (_uiState.value.scanning) return
 
-        scanJob?.cancel()
-
-        _uiState.value = ScannerUiState(
+        _uiState.value = _uiState.value.copy(
             scanning = true,
-            status = "Определяем сеть Wi-Fi…",
-            total = 254
+            devices = emptyList(),
+            progress = 0,
+            status = "Определяем сеть Wi-Fi…"
         )
 
-        scanJob = viewModelScope.launch {
+        viewModelScope.launch {
             try {
-                val networkInfo = getNetworkInfo(context)
+                val wifi = context.applicationContext
+                    .getSystemService(Context.WIFI_SERVICE) as WifiManager
 
-                if (networkInfo == null) {
+                @Suppress("DEPRECATION")
+                val info = wifi.dhcpInfo
+                val ip = info.ipAddress
+
+                if (ip == 0) {
                     _uiState.value = _uiState.value.copy(
                         scanning = false,
-                        status = "Телефон не подключён к Wi-Fi",
-                        error = "Нет активного Wi-Fi соединения"
+                        status = "Телефон не подключён к Wi-Fi"
                     )
                     return@launch
                 }
 
-                val phoneIp = networkInfo.phoneIp
-                val gatewayIp = networkInfo.gatewayIp
-                val subnetPrefix = networkInfo.subnetPrefix
+                val a = ip and 255
+                val b = (ip shr 8) and 255
+                val c = (ip shr 16) and 255
+                val phoneIp = "$a.$b.$c.${(ip shr 24) and 255}"
+
+                val localIps = withContext(Dispatchers.IO) {
+                    try {
+                        NetworkInterface.getNetworkInterfaces().toList()
+                            .flatMap { it.inetAddresses.toList() }
+                            .map { it.hostAddress ?: "" }
+                            .filter { it.contains(".") }
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                }
+
+                val gateway = info.gateway
+                val gatewayIp = if (gateway != 0) {
+                    "${gateway and 255}.${(gateway shr 8) and 255}." +
+                        "${(gateway shr 16) and 255}.${(gateway shr 24) and 255}"
+                } else "не определён"
 
                 _uiState.value = _uiState.value.copy(
-                    network = "Телефон: " + phoneIp + "\nШлюз: " + gatewayIp + "\nПодсеть: " + subnetPrefix + ".0/24",
+                    network = "Телефон: $phoneIp\nШлюз: $gatewayIp\nПодсеть: $a.$b.$c.0/24",
                     status = "Ищем устройства в локальной сети…"
                 )
 
-                val localIps = withContext(Dispatchers.IO) {
-                    getLocalIps()
-                }
+                val arpDevices = withContext(Dispatchers.IO) { readArpTable() }
 
-                val arpDevices = withContext(Dispatchers.IO) {
-                    readArpTable()
-                }
-
-                // Параллельное сканирование подсети
                 val found = mutableListOf<DeviceInfo>()
-                val pool = Executors.newFixedThreadPool(48)
+                val pool = Executors.newFixedThreadPool(32)
                 val latch = CountDownLatch(254)
                 val done = AtomicInteger(0)
 
                 (1..254).forEach { host ->
                     pool.submit {
-                        val address = subnetPrefix + "." + host
+                        val address = "$a.$b.$c.$host"
                         try {
-                            if (InetAddress.getByName(address).isReachable(600)) {
+                            if (InetAddress.getByName(address).isReachable(400)) {
                                 synchronized(found) {
-                                    val name = if (address == gatewayIp) "Роутер (шлюз)" else "Устройство"
                                     found.add(
                                         DeviceInfo(
-                                            ip = address,
-                                            name = name,
-                                            mac = arpDevices[address]
+                                            address,
+                                            if (address == gatewayIp) "Роутер (шлюз)" else "Устройство",
+                                            if (address == gatewayIp) DeviceType.ROUTER else DeviceType.UNKNOWN,
+                                            arpDevices[address]
                                         )
                                     )
                                 }
@@ -115,156 +127,77 @@ class ScannerViewModel : ViewModel() {
                         } catch (_: Exception) {
                         } finally {
                             val p = done.incrementAndGet()
-                            if (p % 8 == 0 || p == 254) {
-                                _uiState.value = _uiState.value.copy(progress = p)
-                            }
+                            _uiState.value = _uiState.value.copy(progress = p)
                             latch.countDown()
                         }
                     }
                 }
-
                 latch.await()
                 pool.shutdown()
 
-                // Добавляем устройства из ARP
                 arpDevices.forEach { (arpIp, mac) ->
                     if (found.none { it.ip == arpIp }) {
                         found.add(
                             DeviceInfo(
-                                ip = arpIp,
-                                name = if (arpIp == gatewayIp) "Роутер (шлюз)" else "Устройство (ARP)",
-                                mac = mac
+                                arpIp,
+                                if (arpIp == gatewayIp) "Роутер (шлюз)" else "Устройство (ARP)",
+                                if (arpIp == gatewayIp) DeviceType.ROUTER else DeviceType.UNKNOWN,
+                                mac
                             )
                         )
                     }
                 }
 
-                // Гарантированно добавляем шлюз
-                if (gatewayIp != "не определён" && found.none { it.ip == gatewayIp }) {
-                    found.add(
-                        DeviceInfo(
-                            ip = gatewayIp,
-                            name = "Роутер (шлюз)",
-                            mac = arpDevices[gatewayIp]
-                        )
-                    )
+                if (found.none { it.ip == gatewayIp } && gatewayIp != "не определён") {
+                    found.add(DeviceInfo(gatewayIp, "Роутер (шлюз)", DeviceType.ROUTER, arpDevices[gatewayIp]))
                 }
 
-                val otherDevices = found
-                    .filter { it.ip !in localIps }
+                val otherDevices = found.filter { it.ip !in localIps }
                     .sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
 
                 _uiState.value = _uiState.value.copy(
                     status = "Проверяем открытые порты…",
-                    devices = otherDevices,
-                    progress = 254
+                    devices = otherDevices
                 )
 
-                // Параллельная проверка портов
                 val devicesWithPorts = withContext(Dispatchers.IO) {
                     otherDevices.map { device ->
-                        async {
-                            val openPorts = targetPorts.filter { port ->
-                                isPortOpen(device.ip, port, 350)
+                        val openPorts = mutableListOf<Int>()
+                        for (port in targetPorts) {
+                            if (isPortOpen(device.ip, port, 300)) {
+                                openPorts.add(port)
                             }
-                            device.copy(ports = openPorts)
                         }
-                    }.awaitAll()
+                        
+                        // Определяем тип на основе портов
+                        val type = when {
+                            openPorts.contains(9100) -> DeviceType.PRINTER
+                            openPorts.contains(3389) -> DeviceType.WINDOWS
+                            openPorts.contains(22) -> DeviceType.LINUX
+                            openPorts.contains(80) || openPorts.contains(443) -> {
+                                // Если это шлюз — роутер, иначе веб-сервер
+                                if (device.type == DeviceType.ROUTER) DeviceType.ROUTER else DeviceType.WEB_SERVER
+                            }
+                            device.type == DeviceType.ROUTER -> DeviceType.ROUTER
+                            else -> DeviceType.UNKNOWN
+                        }
+
+                        device.copy(ports = openPorts, type = type)
+                    }
                 }
 
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
                     devices = devicesWithPorts,
-                    status = "Сканирование завершено. Найдено: " + devicesWithPorts.size,
-                    error = null
+                    status = "Сканирование завершено. Найдено: ${devicesWithPorts.size}"
                 )
 
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
-                    status = "Ошибка сканирования",
-                    error = e.message ?: "Неизвестная ошибка"
+                    status = e.message ?: "Не удалось просканировать сеть"
                 )
             }
-        }
-    }
-
-    fun cancelScan() {
-        scanJob?.cancel()
-        _uiState.value = _uiState.value.copy(
-            scanning = false,
-            status = "Сканирование отменено"
-        )
-    }
-
-    // ---------------- Вспомогательные методы ----------------
-
-    private data class NetworkInfo(
-        val phoneIp: String,
-        val gatewayIp: String,
-        val subnetPrefix: String
-    )
-
-    private fun getNetworkInfo(context: Context): NetworkInfo? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val network = cm.activeNetwork ?: return null
-            val linkProperties: LinkProperties = cm.getLinkProperties(network) ?: return null
-
-            val linkAddresses = linkProperties.linkAddresses
-            val ipv4 = linkAddresses.firstOrNull {
-                it.address is java.net.Inet4Address && !it.address.isLoopbackAddress
-            } ?: return null
-
-            val phoneIp = ipv4.address.hostAddress ?: return null
-            val parts = phoneIp.split(".")
-            if (parts.size != 4) return null
-
-            val subnetPrefix = parts[0] + "." + parts[1] + "." + parts[2]
-
-            val gateway = linkProperties.routes
-                .firstOrNull { it.isDefaultRoute && it.gateway != null }
-                ?.gateway?.hostAddress ?: "не определён"
-
-            return NetworkInfo(phoneIp, gateway, subnetPrefix)
-        }
-
-        return getNetworkInfoLegacy(context)
-    }
-
-    @Suppress("DEPRECATION")
-    private fun getNetworkInfoLegacy(context: Context): NetworkInfo? {
-        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val info = wifi.dhcpInfo
-        if (info.ipAddress == 0) return null
-
-        val a = info.ipAddress and 255
-        val b = (info.ipAddress shr 8) and 255
-        val c = (info.ipAddress shr 16) and 255
-        val d = (info.ipAddress shr 24) and 255
-        val phoneIp = a.toString() + "." + b + "." + c + "." + d
-
-        val gatewayIp = if (info.gateway != 0) {
-            val ga = info.gateway and 255
-            val gb = (info.gateway shr 8) and 255
-            val gc = (info.gateway shr 16) and 255
-            val gd = (info.gateway shr 24) and 255
-            ga.toString() + "." + gb + "." + gc + "." + gd
-        } else {
-            "не определён"
-        }
-
-        return NetworkInfo(phoneIp, gatewayIp, a.toString() + "." + b + "." + c)
-    }
-
-    private fun getLocalIps(): List<String> {
-        return try {
-            NetworkInterface.getNetworkInterfaces().toList()
-                .flatMap { it.inetAddresses.toList() }
-                .mapNotNull { it.hostAddress }
-                .filter { it.contains(".") && !it.startsWith("127.") }
-        } catch (_: Exception) {
-            emptyList()
         }
     }
 
