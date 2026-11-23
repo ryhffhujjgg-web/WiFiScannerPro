@@ -1,23 +1,26 @@
 package com.wifiscanner.pro
 
-import android.app.Activity
+import android.Manifest
 import android.content.Context
-import android.net.wifi.WifiManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import java.net.InetAddress
-import java.util.concurrent.Executors
-
-data class DeviceInfo(val ip: String, val name: String)
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,160 +33,124 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Какие разрешения нужны в зависимости от версии Android. */
+private fun requiredPermissions(): Array<String> {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        )
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+}
+
+private fun Context.hasAllPermissions(): Boolean {
+    return requiredPermissions().all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
 @Composable
-fun WifiScannerScreen() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var scanning by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Готов к сканированию") }
-    var network by remember { mutableStateOf("Сеть пока не определена") }
-    var devices by remember { mutableStateOf(listOf<DeviceInfo>()) }
+fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
+    val context = LocalContext.current
+    val state by vm.uiState.collectAsStateWithLifecycle()
 
-    fun scanNetwork() {
-        if (scanning) return
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result.values.all { it }) {
+            vm.scan(context)
+        }
+    }
 
-        scanning = true
-        devices = emptyList()
-        status = "Определяем сеть Wi-Fi…"
-
-        Thread {
-            try {
-                val wifi = context.applicationContext
-                    .getSystemService(Context.WIFI_SERVICE) as WifiManager
-                val info = wifi.dhcpInfo
-                val ip = info.ipAddress
-
-                if (ip == 0) {
-                    throw Exception("Телефон не подключён к Wi-Fi")
-                }
-
-                val a = ip and 255
-                val b = (ip shr 8) and 255
-                val c = (ip shr 16) and 255
-                val phoneIp = "$a.$b.$c.${(ip shr 24) and 255}"
-                val gateway = info.gateway
-                val gatewayIp = if (gateway != 0) {
-                    "${gateway and 255}.${(gateway shr 8) and 255}." +
-                    "${(gateway shr 16) and 255}.${(gateway shr 24) and 255}"
-                } else {
-                    "не определён"
-                }
-
-                (context as Activity).runOnUiThread {
-                    network = "Телефон: $phoneIp\nШлюз: $gatewayIp\nПодсеть: $a.$b.$c.0/24"
-                    status = "Ищем устройства в локальной сети…"
-                }
-
-                val found = java.util.Collections.synchronizedList(
-                    mutableListOf<DeviceInfo>()
-                )
-                val pool = Executors.newFixedThreadPool(32)
-                val tasks = (1..254).map { host ->
-                    pool.submit {
-                        val address = "$a.$b.$c.$host"
-                        try {
-                            if (InetAddress.getByName(address).isReachable(400)) {
-                                found.add(
-                                    DeviceInfo(
-                                        address,
-                                        if (address == gatewayIp) "Роутер (шлюз)" else "Устройство в сети"
-                                    )
-                                )
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-
-                tasks.forEach { it.get() }
-                pool.shutdown()
-
-                if (found.none { it.ip == gatewayIp } && gatewayIp != "не определён") {
-                    found.add(DeviceInfo(gatewayIp, "Роутер (шлюз)"))
-                }
-
-                val result = found.sortedBy { it.ip.substringAfterLast(".").toIntOrNull() ?: 0 }
-
-                (context as Activity).runOnUiThread {
-                    devices = result
-                    status = "Сканирование завершено. Найдено: ${result.size}"
-                    scanning = false
-                }
-            } catch (e: Exception) {
-                (context as Activity).runOnUiThread {
-                    status = e.message ?: "Не удалось просканировать сеть"
-                    scanning = false
-                }
-            }
-        }.start()
+    fun startScan() {
+        if (!context.hasAllPermissions()) {
+            permissionLauncher.launch(requiredPermissions())
+        } else {
+            vm.scan(context)
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(
-                "WiFi Scanner Pro",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Text(
-                "Диагностика домашней сети",
-                style = MaterialTheme.typography.bodyMedium
-            )
+            item {
+                Text("WiFi Scanner Pro", style = MaterialTheme.typography.headlineMedium)
+                Text("Диагностика домашней сети", style = MaterialTheme.typography.bodyMedium)
+            }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Состояние сети", style = MaterialTheme.typography.titleLarge)
-                    Text(network)
-                    Text(status, color = MaterialTheme.colorScheme.primary)
-
-                    if (scanning) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-
-                    Button(
-                        onClick = { scanNetwork() },
-                        enabled = !scanning,
-                        modifier = Modifier.fillMaxWidth()
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(if (scanning) "Сканирование…" else "Начать сканирование")
+                        Text("Состояние сети", style = MaterialTheme.typography.titleLarge)
+                        Text(state.network)
+                        Text(state.status, color = MaterialTheme.colorScheme.primary)
+
+                        if (state.scanning) {
+                            LinearProgressIndicator(
+                                progress = { state.progress.toFloat() / state.total },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "Проверено ${state.progress} из ${state.total}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        Button(
+                            onClick = { startScan() },
+                            enabled = !state.scanning,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (state.scanning) "Сканирование…" else "Начать сканирование")
+                        }
                     }
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Найденные устройства", style = MaterialTheme.typography.titleLarge)
-                Text("${devices.size}")
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Найденные устройства", style = MaterialTheme.typography.titleLarge)
+                    Text("${state.devices.size}")
+                }
             }
 
-            if (devices.isEmpty() && !scanning) {
-                Text("Нажми «Начать сканирование», чтобы проверить сеть.")
+            if (state.devices.isEmpty() && !state.scanning) {
+                item {
+                    Text("Нажми «Начать сканирование», чтобы проверить сеть.")
+                }
             }
 
-            devices.forEach { device ->
+            items(state.devices) { device ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text(device.name, style = MaterialTheme.typography.titleMedium)
-                        Text("IP-адрес: ${device.ip}")
+                        Text("IP: ${device.ip}")
+                        device.mac?.let { Text("MAC: $it", style = MaterialTheme.typography.bodySmall) }
                     }
                 }
             }
 
-            Text(
-                "Примечание: некоторые устройства не отвечают на проверку доступности, " +
-                "поэтому могут не отображаться. MAC-адреса и производители пока не определяются.",
-                style = MaterialTheme.typography.bodySmall
-            )
+            item {
+                Text(
+                    "Примечание: некоторые устройства не отвечают на ping, " +
+                        "но видны в ARP-таблице. MAC определяется, если устройство " +
+                        "недавно общалось с роутером.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
