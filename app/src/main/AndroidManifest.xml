@@ -14,17 +14,19 @@
     <application
         android:allowBackup="false"
         android:label="WiFi Scanner Pro"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        tools:targetApi="35">
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:screenOrientation="portrait">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
     </application>
 </manifest>
