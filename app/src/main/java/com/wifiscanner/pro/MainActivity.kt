@@ -59,6 +59,7 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
+        // Если пользователь разрешил всё, что просили — запускаем скан
         if (result.values.all { it }) {
             vm.scan(context)
         }
@@ -79,11 +80,13 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // 1. Заголовок
             item {
                 Text("WiFi Scanner Pro", style = MaterialTheme.typography.headlineMedium)
                 Text("Диагностика домашней сети", style = MaterialTheme.typography.bodyMedium)
             }
 
+            // 2. Карточка статуса и кнопки
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -116,6 +119,7 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 }
             }
 
+            // 3. Заголовок списка устройств
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -127,27 +131,30 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                 }
             }
 
+            // 4. Заглушка, если список пуст
             if (state.devices.isEmpty() && !state.scanning) {
                 item {
                     Text("Нажми «Начать сканирование», чтобы проверить сеть.")
                 }
             }
 
+            // 5. Список устройств (без MAC-адресов)
             items(state.devices) { device ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text(device.name, style = MaterialTheme.typography.titleMedium)
                         Text("IP: ${device.ip}")
-                        device.mac?.let { Text("MAC: $it", style = MaterialTheme.typography.bodySmall) }
+                        // Вывод MAC-адреса убран, так как Android 10+ блокирует его чтение
                     }
                 }
             }
 
+            // 6. Примечание внизу
             item {
                 Text(
                     "Примечание: некоторые устройства не отвечают на ping, " +
-                        "но видны в ARP-таблице. MAC определяется, если устройство " +
-                        "недавно общалось с роутером.",
+                        "но видны в ARP-таблице. Список может быть неполным, " +
+                        "если устройства скрыты настройками роутера.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
