@@ -73,10 +73,12 @@ class ScannerViewModel : ViewModel() {
                     return@launch
                 }
 
-                val (phoneIp, gatewayIp, subnetPrefix) = networkInfo
+                val phoneIp = networkInfo.phoneIp
+                val gatewayIp = networkInfo.gatewayIp
+                val subnetPrefix = networkInfo.subnetPrefix
 
                 _uiState.value = _uiState.value.copy(
-                    network = "Телефон: $phoneIp\nШлюз: $gatewayIp\nПодсеть: $subnetPrefix.0/24",
+                    network = "Телефон: " + phoneIp + "\nШлюз: " + gatewayIp + "\nПодсеть: " + subnetPrefix + ".0/24",
                     status = "Ищем устройства в локальной сети…"
                 )
 
@@ -96,14 +98,11 @@ class ScannerViewModel : ViewModel() {
 
                 (1..254).forEach { host ->
                     pool.submit {
-                        val address = "$subnetPrefix.$host"
+                        val address = subnetPrefix + "." + host
                         try {
                             if (InetAddress.getByName(address).isReachable(600)) {
                                 synchronized(found) {
-                                    val name = when {
-                                        address == gatewayIp -> "Роутер (шлюз)"
-                                        else -> "Устройство"
-                                    }
+                                    val name = if (address == gatewayIp) "Роутер (шлюз)" else "Устройство"
                                     found.add(
                                         DeviceInfo(
                                             ip = address,
@@ -116,7 +115,6 @@ class ScannerViewModel : ViewModel() {
                         } catch (_: Exception) {
                         } finally {
                             val p = done.incrementAndGet()
-                            // Обновляем прогресс реже
                             if (p % 8 == 0 || p == 254) {
                                 _uiState.value = _uiState.value.copy(progress = p)
                             }
@@ -128,7 +126,7 @@ class ScannerViewModel : ViewModel() {
                 latch.await()
                 pool.shutdown()
 
-                // Добавляем устройства из ARP, которых не нашли пингом
+                // Добавляем устройства из ARP
                 arpDevices.forEach { (arpIp, mac) ->
                     if (found.none { it.ip == arpIp }) {
                         found.add(
@@ -177,7 +175,7 @@ class ScannerViewModel : ViewModel() {
                 _uiState.value = _uiState.value.copy(
                     scanning = false,
                     devices = devicesWithPorts,
-                    status = "Сканирование завершено. Найдено: ${devicesWithPorts.size}",
+                    status = "Сканирование завершено. Найдено: " + devicesWithPorts.size,
                     error = null
                 )
 
@@ -204,11 +202,10 @@ class ScannerViewModel : ViewModel() {
     private data class NetworkInfo(
         val phoneIp: String,
         val gatewayIp: String,
-        val subnetPrefix: String // например "192.168.1"
+        val subnetPrefix: String
     )
 
     private fun getNetworkInfo(context: Context): NetworkInfo? {
-        // Сначала пробуем современный способ
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             val network = cm.activeNetwork ?: return null
@@ -223,9 +220,8 @@ class ScannerViewModel : ViewModel() {
             val parts = phoneIp.split(".")
             if (parts.size != 4) return null
 
-            val subnetPrefix = "\( {parts[0]}. \){parts[1]}.${parts[2]}"
+            val subnetPrefix = parts[0] + "." + parts[1] + "." + parts[2]
 
-            // Пытаемся найти шлюз
             val gateway = linkProperties.routes
                 .firstOrNull { it.isDefaultRoute && it.gateway != null }
                 ?.gateway?.hostAddress ?: "не определён"
@@ -233,7 +229,6 @@ class ScannerViewModel : ViewModel() {
             return NetworkInfo(phoneIp, gateway, subnetPrefix)
         }
 
-        // Fallback для старых устройств
         return getNetworkInfoLegacy(context)
     }
 
@@ -247,17 +242,19 @@ class ScannerViewModel : ViewModel() {
         val b = (info.ipAddress shr 8) and 255
         val c = (info.ipAddress shr 16) and 255
         val d = (info.ipAddress shr 24) and 255
-        val phoneIp = "$a.$b.$c.$d"
+        val phoneIp = a.toString() + "." + b + "." + c + "." + d
 
         val gatewayIp = if (info.gateway != 0) {
             val ga = info.gateway and 255
             val gb = (info.gateway shr 8) and 255
             val gc = (info.gateway shr 16) and 255
             val gd = (info.gateway shr 24) and 255
-            "$ga.$gb.$gc.$gd"
-        } else "не определён"
+            ga.toString() + "." + gb + "." + gc + "." + gd
+        } else {
+            "не определён"
+        }
 
-        return NetworkInfo(phoneIp, gatewayIp, "$a.$b.$c")
+        return NetworkInfo(phoneIp, gatewayIp, a.toString() + "." + b + "." + c)
     }
 
     private fun getLocalIps(): List<String> {
