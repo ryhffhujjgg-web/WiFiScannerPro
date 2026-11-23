@@ -1,20 +1,23 @@
 package com.wifiscanner.pro
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,16 +63,11 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
     val context = LocalContext.current
     val state by vm.uiState.collectAsStateWithLifecycle()
 
-    var permissionDenied by remember { mutableStateOf(false) }
-
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         if (result.values.all { it }) {
-            permissionDenied = false
             vm.scan(context)
-        } else {
-            permissionDenied = true
         }
     }
 
@@ -77,9 +75,16 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
         if (!context.hasAllPermissions()) {
             permissionLauncher.launch(requiredPermissions())
         } else {
-            permissionDenied = false
             vm.scan(context)
         }
+    }
+
+    // Функция для копирования IP в буфер обмена
+    fun copyToClipboard(text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("IP Address", text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(context, "IP скопирован: $text", Toast.LENGTH_SHORT).show()
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -90,89 +95,37 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Text(
-                    text = "WiFi Scanner Pro",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Диагностика домашней сети",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("WiFi Scanner Pro", style = MaterialTheme.typography.headlineMedium)
+                Text("Диагностика домашней сети", style = MaterialTheme.typography.bodyMedium)
             }
 
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
+                Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "Состояние сети",
-                            style = MaterialTheme.typography.titleLarge
-                        )
-
+                        Text("Состояние сети", style = MaterialTheme.typography.titleLarge)
                         Text(state.network)
-
-                        Text(
-                            text = state.status,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium
-                        )
-
-                        if (state.error != null) {
-                            Text(
-                                text = state.error!!,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-
-                        if (permissionDenied) {
-                            Text(
-                                text = "Нужно разрешение на местоположение и ближайшие Wi-Fi устройства",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
+                        Text(state.status, color = MaterialTheme.colorScheme.primary)
 
                         if (state.scanning) {
                             LinearProgressIndicator(
-                                progress = { state.progress.toFloat() / state.total.coerceAtLeast(1) },
+                                progress = { state.progress.toFloat() / state.total },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Text(
-                                text = "Проверено ${state.progress} из ${state.total}",
+                                "Проверено ${state.progress} из ${state.total}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Button(
+                            onClick = { startScan() },
+                            enabled = !state.scanning,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Button(
-                                onClick = { startScan() },
-                                enabled = !state.scanning,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(if (state.scanning) "Сканирование…" else "Начать сканирование")
-                            }
-
-                            if (state.scanning) {
-                                OutlinedButton(
-                                    onClick = { vm.cancelScan() },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Отмена")
-                                }
-                            }
+                            Text(if (state.scanning) "Сканирование…" else "Начать сканирование")
                         }
                     }
                 }
@@ -184,76 +137,70 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Найденные устройства",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = "${state.devices.size}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Найденные устройства", style = MaterialTheme.typography.titleLarge)
+                    Text("${state.devices.size}")
                 }
             }
 
             if (state.devices.isEmpty() && !state.scanning) {
                 item {
-                    Text(
-                        text = "Нажми «Начать сканирование», чтобы проверить сеть.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("Нажми «Начать сканирование», чтобы проверить сеть.")
                 }
             }
 
             items(state.devices) { device ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Wifi,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { copyToClipboard(device.ip) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Иконка устройства
+                        Icon(
+                            imageVector = when (device.type) {
+                                DeviceType.ROUTER -> Icons.Default.Router
+                                DeviceType.WINDOWS -> Icons.Default.Computer
+                                DeviceType.LINUX -> Icons.Default.Terminal
+                                DeviceType.PRINTER -> Icons.Default.Print
+                                DeviceType.WEB_SERVER -> Icons.Default.Language
+                                DeviceType.UNKNOWN -> Icons.Default.Devices
+                            },
+                            contentDescription = "Иконка устройства",
+                            modifier = Modifier.size(32.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column {
                             Text(
-                                text = device.name,
+                                device.name,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                        }
+                            Text("IP: ${device.ip}")
 
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("IP: ${device.ip}")
-
-                        if (!device.mac.isNullOrBlank()) {
-                            Text(
-                                text = "MAC: ${device.mac}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        if (device.ports.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = "Открытые порты",
-                                    tint = Color(0xFF4CAF50),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "Открытые порты: ${device.ports.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFF4CAF50)
-                                )
+                            if (device.ports.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Порты",
+                                        tint = Color(0xFF4CAF50),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "Порты: ${device.ports.joinToString(", ")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF4CAF50)
+                                    )
+                                }
                             }
                         }
                     }
@@ -262,10 +209,9 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
 
             item {
                 Text(
-                    text = "Проверяются порты: 22 (SSH), 80/443 (Web), 445 (SMB), 3389 (RDP), 9100 (Принтер).",
+                    "Проверяются популярные порты: 22 (SSH), 80/443 (Web), 445 (SMB), 3389 (RDP), 9100 (Принтер).",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
         }
