@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -79,12 +81,21 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
         }
     }
 
-    // Функция для копирования IP в буфер обмена
     fun copyToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("IP Address", text)
         clipboard.setPrimaryClip(clip)
         Toast.makeText(context, "IP скопирован: $text", Toast.LENGTH_SHORT).show()
+    }
+
+    // Функция для открытия браузера
+    fun openBrowser(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "Не удалось открыть браузер", Toast.LENGTH_SHORT).show()
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -150,57 +161,75 @@ fun WifiScannerScreen(vm: ScannerViewModel = viewModel()) {
 
             items(state.devices) { device ->
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { copyToClipboard(device.ip) }
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Иконка устройства
-                        Icon(
-                            imageVector = when (device.type) {
-                                DeviceType.ROUTER -> Icons.Default.Router
-                                DeviceType.WINDOWS -> Icons.Default.Computer
-                                DeviceType.LINUX -> Icons.Default.Terminal
-                                DeviceType.PRINTER -> Icons.Default.Print
-                                DeviceType.WEB_SERVER -> Icons.Default.Language
-                                DeviceType.UNKNOWN -> Icons.Default.Devices
-                            },
-                            contentDescription = "Иконка устройства",
-                            modifier = Modifier.size(32.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        
-                        Spacer(modifier = Modifier.width(14.dp))
-
-                        Column {
-                            Text(
-                                device.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        // Верхняя часть: иконка, имя, IP (кликабельно для копирования)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { copyToClipboard(device.ip) },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = when (device.type) {
+                                    DeviceType.ROUTER -> Icons.Default.Router
+                                    DeviceType.WINDOWS -> Icons.Default.Computer
+                                    DeviceType.LINUX -> Icons.Default.Terminal
+                                    DeviceType.PRINTER -> Icons.Default.Print
+                                    DeviceType.WEB_SERVER -> Icons.Default.Language
+                                    DeviceType.UNKNOWN -> Icons.Default.Devices
+                                },
+                                contentDescription = "Иконка устройства",
+                                modifier = Modifier.size(32.dp),
+                                tint = MaterialTheme.colorScheme.primary
                             )
-                            Text("IP: ${device.ip}")
 
-                            if (device.ports.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Lock,
-                                        contentDescription = "Порты",
-                                        tint = Color(0xFF4CAF50),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = "Порты: ${device.ports.joinToString(", ")}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF4CAF50)
-                                    )
+                            Spacer(modifier = Modifier.width(14.dp))
+
+                            Column {
+                                Text(
+                                    device.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("IP: ${device.ip}")
+
+                                if (device.ports.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = "Порты",
+                                            tint = Color(0xFF4CAF50),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "Порты: ${device.ports.joinToString(", ")}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF4CAF50)
+                                        )
+                                    }
                                 }
+                            }
+                        }
+
+                        // Если у устройства открыт веб-порт (80 или 443), показываем кнопку
+                        if (device.ports.contains(80) || device.ports.contains(443)) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    val protocol = if (device.ports.contains(443)) "https" else "http"
+                                    openBrowser("$protocol://${device.ip}")
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.OpenInNew, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Открыть веб-интерфейс")
                             }
                         }
                     }
