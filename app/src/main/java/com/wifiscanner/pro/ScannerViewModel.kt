@@ -21,12 +21,11 @@ import java.util.concurrent.atomic.AtomicInteger
 data class DeviceInfo(
     val ip: String,
     val name: String,
-    val type: DeviceType, // Новое поле: тип устройства
+    val type: DeviceType,
     val mac: String? = null,
     val ports: List<Int> = emptyList()
 )
 
-// Перечисление типов устройств для иконок
 enum class DeviceType {
     ROUTER, WINDOWS, LINUX, PRINTER, WEB_SERVER, UNKNOWN
 }
@@ -168,14 +167,12 @@ class ScannerViewModel : ViewModel() {
                                 openPorts.add(port)
                             }
                         }
-                        
-                        // Определяем тип на основе портов
+
                         val type = when {
                             openPorts.contains(9100) -> DeviceType.PRINTER
                             openPorts.contains(3389) -> DeviceType.WINDOWS
                             openPorts.contains(22) -> DeviceType.LINUX
                             openPorts.contains(80) || openPorts.contains(443) -> {
-                                // Если это шлюз — роутер, иначе веб-сервер
                                 if (device.type == DeviceType.ROUTER) DeviceType.ROUTER else DeviceType.WEB_SERVER
                             }
                             device.type == DeviceType.ROUTER -> DeviceType.ROUTER
